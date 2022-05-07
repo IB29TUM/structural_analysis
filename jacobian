@@ -1,0 +1,289 @@
+from sympy import simplify, diff, symbols, integrate
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import TextBox, RadioButtons, Button
+
+from mpl_toolkits.mplot3d.axes3d import get_test_data
+# This import registers the 3D projection, but is otherwise unused.
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+
+
+xi, eta = symbols('xi eta')
+
+def polygon_area(points):  
+    """Return the area of the polygon whose vertices are given by the
+    sequence points.
+    """
+    area = 0
+    q = points[-1]
+    for p in points:  
+        area += p[0] * q[1] - p[1] * q[0]
+        q = p
+    return -area / 2
+def prettyPrintMatrix(matrix):
+    s = [[str(e) for e in row] for row in matrix]
+    lens = [max(map(len, col)) for col in zip(*s)]
+    fmt = '   '.join('{{:{}}}'.format(x) for x in lens)
+    table = [fmt.format(*row) for row in s]
+
+    return '['+']\n['.join(table)+']'
+
+def shapeFct_symbolic():
+    N = [None]*4
+    N[0] = 0.25*(1-xi)*(1-eta)
+    N[1] = 0.25*(1+xi)*(1-eta)
+    N[2] = 0.25*(1+xi)*(1+eta)
+    N[3] = 0.25*(1-xi)*(1+eta)
+    return N
+def shapeFct_evaluated(Xi,Eta):
+    N = [None]*4
+    N[0] = 0.25*(1-Xi)*(1-Eta)
+    N[1] = 0.25*(1+Xi)*(1-Eta)
+    N[2] = 0.25*(1+Xi)*(1+Eta)
+    N[3] = 0.25*(1-Xi)*(1+Eta)
+    return N
+def d_shapeFct_evaluated(Xi,Eta):
+    B = [None]*8
+    B[0] = 0.25*(-1+Eta)
+    B[2] = 0.25*( 1-Eta)
+    B[4] = 0.25*( 1+Eta)
+    B[6] = 0.25*(-1-Eta)
+
+    B[1] = 0.25*(-1+Xi)
+    B[3] = 0.25*(-1-Xi)
+    B[5] = 0.25*( 1+Xi)
+    B[7] = 0.25*( 1-Xi)
+    B = np.array(B).reshape(4,2)
+    return B
+
+def get_nodeCoordinates(nodes):
+    nodeVec = np.empty((4,2))
+    for i in range(4):nodeVec[i] = eval(nodes[i].text)
+    return nodeVec
+def get_evaluationParameters():
+    para = eval(evalPoint.text)
+    return para[0],para[1]
+
+def compute_Jacobian_symbolic():
+    nodeVec = get_nodeCoordinates(nodes)
+    N = shapeFct_symbolic()
+
+    x = simplify(np.dot(nodeVec[:,0],N))
+    y = simplify(np.dot(nodeVec[:,1],N))
+
+    J11 = x.diff(xi)
+    J12 = y.diff(xi)
+    J21 = x.diff(eta)
+    J22 = y.diff(eta)
+
+    J = simplify(np.array([[J11, J12], [J21, J22]]))
+    return J
+def compute_Jacobian_evaluated(Xi = None,Eta = None):
+    if Xi == None: Xi,Eta = get_evaluationParameters()
+    nodeVec = get_nodeCoordinates(nodes)
+    B = d_shapeFct_evaluated(Xi,Eta)
+    J = np.dot(B.T,nodeVec)
+    return J
+
+def compute_detJ_symbolic(J):
+    return simplify(J[0,0]*J[1,1]-J[1,0]*J[0,1])
+def compute_invJ_symbolic(J, detJ):
+    return simplify(np.array([[J[1,1], -J[0,1]], [-J[1,0], J[0,0]]])/detJ)
+
+def integrate_detJ_numerical(ng):
+    xg, wg = np.polynomial.legendre.leggauss(ng)
+    Wg = np.outer(wg, wg).reshape(ng*ng)
+    XiG,EtaG = np.meshgrid(xg, xg)
+    XiG = XiG.reshape(XiG.size)
+    EtaG = EtaG.reshape(EtaG.size)
+
+    detJ = np.zeros(XiG.size)
+    for i in range(len(XiG)): detJ[i] = np.linalg.det(compute_Jacobian_evaluated(XiG[i],EtaG[i]))
+    return np.around(np.dot(detJ,Wg),5)
+def integrate_detJ_symbolic():
+    J = compute_Jacobian_symbolic()
+    detJ = compute_detJ_symbolic(J)
+    return float(integrate(integrate(detJ, (eta, -1,1)),(xi, -1,1)))
+
+def compute_derivativeGeometrySpace_evaluated(J):
+    idx = int(ShapeFctSelect.value_selected[-1])-1 
+    Xi,Eta = get_evaluationParameters()
+    B = d_shapeFct_evaluated(Xi,Eta)
+    dNi = np.dot(np.linalg.inv(J),B[idx])
+    return dNi, idx
+def compute_derivativeGeometrySpace_symbolic(invJ):
+    idx = int(ShapeFctSelect.value_selected[-1])-1
+    invJ = np.array(invJ.args[0]).reshape(invJ.args[1])
+    
+    Ni = shapeFct_symbolic()[idx]
+    Bi = np.array([Ni.diff(xi),Ni.diff(eta)])
+
+    dNi = simplify(np.dot(invJ,Bi))
+    return dNi, idx
+
+#######################################################################
+
+def update_plot():
+    fig.delaxes(fig.axes[len(fig.axes)-1])
+    fig.delaxes(fig.axes[len(fig.axes)-1])
+
+    axs1 = fig.add_subplot(211)
+    axs2 = fig.add_subplot(212, projection='3d')
+    axs1.axis('equal')
+
+    #draw elment definition in parameter space
+    axs1.scatter([-1.8,1.8],[-1.8,1.8], color = 'white')
+    axs1.plot([-1,1,1,-1,-1],[-1,-1,1,1,-1],'o-', color = 'grey')
+    axs1.arrow(0, -1.5, 0, 3, head_width=0.05, head_length=0.1, fc='grey', ec='grey')
+    axs1.arrow(-1.5, 0, 3, 0, head_width=0.05, head_length=0.1, fc='grey', ec='grey')
+    axs1.text(1.6,0.02,r'$\xi$'+'[xi]', color = 'grey')
+    axs1.text(0.02,1.5,r'$\eta$'+'[eta]', color = 'grey')
+    axs1.text(-1.15,-1.2,'1', color = 'grey')
+    axs1.text(1.05,-1.2,'2', color = 'grey')
+    axs1.text(1.05,1.05,'3', color = 'grey')
+    axs1.text(-1.15,1.05,'4', color = 'grey')
+
+    #draw elment in geometry space
+    nodeVec = get_nodeCoordinates(nodes)
+    axs1.text(nodeVec[0,0],nodeVec[0,1],'1', color = 'blue')
+    axs1.text(nodeVec[1,0],nodeVec[1,1],'2', color = 'blue')
+    axs1.text(nodeVec[2,0],nodeVec[2,1],'3', color = 'blue')
+    axs1.text(nodeVec[3,0],nodeVec[3,1],'4', color = 'blue')
+    axs1.plot(np.hstack((nodeVec[:,0],nodeVec[0,0])),np.hstack((nodeVec[:,1],nodeVec[0,1])),'o-')
+
+    #plot shape functions/detJ
+    X_phys = np.zeros(X.shape)
+    Y_phys = np.zeros(Y.shape)
+
+    N_plot = shapeFct_evaluated(X,Y)
+
+    for i in range(4):
+        X_phys += nodeVec[i,0]*N_plot[i]
+        Y_phys += nodeVec[i,1]*N_plot[i]
+
+    if ShapeFctSelect.value_selected[0] == 'N':
+        idx = int(ShapeFctSelect.value_selected[-1])-1
+        axs2.plot_surface(X_phys, Y_phys, N_plot[idx], linewidth=0, antialiased=False)
+    else:
+        fig.delaxes(fig.axes[len(fig.axes)-1])
+        axs2 = fig.add_subplot(212)
+        axs2.axis('equal')
+        axs2.pcolor(X_phys, Y_phys, X_phys)
+def update_Text_symbolic():
+    J = compute_Jacobian_symbolic()
+    Jprint = np.array(J.args[0]).reshape(J.args[1])
+    jacobi.set_text('Jacobian:\n'+prettyPrintMatrix(np.array(Jprint, dtype='str')))
+
+    detJ = compute_detJ_symbolic(J)
+    detjacobi.set_text('det(J) = '+str(detJ))
+
+    invJ = compute_invJ_symbolic(J, detJ)
+    invJ = simplify(invJ)
+    invJprint = np.array(invJ.args[0]).reshape(invJ.args[1])
+    invjacobi.set_text('inv(J):\n'+prettyPrintMatrix(np.array(invJprint, dtype='str')))
+
+    if ShapeFctSelect.value_selected[0] == 'N':
+        dNi, idx = compute_derivativeGeometrySpace_symbolic(invJ)
+        dxNi.set_text('(d/dx)N'+str(idx+1)+' = '+str(dNi[0]))
+        dyNi.set_text('(d/dy)N'+str(idx+1)+' = '+str(dNi[1]))
+    else:
+        dxNi.set_text('(d/dx)Ni'+' = ')
+        dyNi.set_text('(d/dy)Ni'+' = ')
+def update_Text_evaluated():
+    pos = str(get_evaluationParameters())
+    
+    J = compute_Jacobian_evaluated()
+    jacobi_eval.set_text('Jacobian'+pos+':\n'+prettyPrintMatrix(np.array(np.around(J,5), dtype='str')))
+    detjacobi_eval.set_text('det(J'+pos+') = '+str(np.around(np.linalg.det(J),5)))
+    A = integrate_detJ_numerical(2)
+    area.set_text('A = '+r'$\int d \Omega$'+' = ' +r'$\iint detJ d \xi d \eta$'+' = '+str(A))
+    
+    if np.linalg.det(J) == 0:
+        invjacobi_eval.set_text('inv(J'+pos+'):\n'+'ERROR det(J'+pos+') = 0 !!!')
+    else:
+        invjacobi_eval.set_text('inv(J'+pos+'):\n'+prettyPrintMatrix(np.array(np.around(np.linalg.inv(J),5), dtype='str')))
+
+    if ShapeFctSelect.value_selected[0] == 'N':
+        if np.linalg.det(J) == 0:
+            idx = idx = int(ShapeFctSelect.value_selected[-1])-1 
+            dxNi_eval.set_text('(d/dx)N'+str(idx+1)+pos+' = '+'ERROR det(J'+pos+') = 0 !!!')
+            dyNi_eval.set_text('(d/dy)N'+str(idx+1)+pos+' = '+'ERROR det(J'+pos+') = 0 !!!')
+        else:
+            dNi, idx = compute_derivativeGeometrySpace_evaluated(J)
+            dxNi_eval.set_text('(d/dx)N'+str(idx+1)+pos+' = '+str(np.around(dNi[0],5)))
+            dyNi_eval.set_text('(d/dy)N'+str(idx+1)+pos+' = '+str(np.around(dNi[1],5)))
+    else:
+        dxNi_eval.set_text('(d/dx)Ni'+pos+' = ')
+        dyNi_eval.set_text('(d/dy)Ni'+pos+' = ')
+
+#######################################################################
+
+def submit(text):
+    update_plot()
+    update_Text_symbolic()
+    update_Text_evaluated()
+    plt.draw()
+
+def submitShort(text):
+    update_Text_evaluated()
+    plt.draw()
+
+def resetFct(event):
+    nodes[0].set_val('-1,-1')
+    nodes[1].set_val('1,-1')
+    nodes[2].set_val('1,1')
+    nodes[3].set_val('-1,1')
+
+#######################################################################
+
+xPlot = np.linspace(-1,1,num = 20, endpoint=True)
+yPlot = np.linspace(-1,1,num = 20, endpoint=True)
+X,Y = np.meshgrid(xPlot, yPlot)
+
+fig = plt.figure()
+#plt.axes(visible = False)
+fig.subplots_adjust(left = 0.5,hspace=0.5)
+fig.set_size_inches(9, 9)
+
+nodes = [None]*4
+
+fig.text(0.5,0.95,'Tool for the investigation of the Jacobian',fontsize = 20,horizontalalignment = 'center')
+
+jacobi    = fig.text(0.05,0.55,'empty')
+invjacobi = fig.text(0.05,0.475,'empty')
+detjacobi = fig.text(0.05,0.425,'empty')
+area      = fig.text(0.05,0.4,'empty')
+
+jacobi_eval    = fig.text(0.05,0.25,'empty')
+invjacobi_eval = fig.text(0.05,0.175,'empty')
+detjacobi_eval = fig.text(0.05,0.125,'empty')
+
+dxNi = fig.text(0.05,0.08,'empty')
+dyNi = fig.text(0.05,0.06,'empty')
+dxNi_eval = fig.text(0.05,0.04,'empty')
+dyNi_eval = fig.text(0.05,0.02,'empty')
+
+nodes[0] = TextBox(plt.axes([0.2, 0.825,  0.08, 0.04]), 'node 1 (x,y):     ', initial='0,0')
+nodes[1] = TextBox(plt.axes([0.2, 0.775, 0.08, 0.04]), 'node 2 (x,y):     ', initial='3,0.5')
+nodes[2] = TextBox(plt.axes([0.2, 0.725,  0.08, 0.04]), 'node 3 (x,y):     ', initial='6,5')
+nodes[3] = TextBox(plt.axes([0.2, 0.675, 0.08, 0.04]), 'node 4 (x,y):     ', initial='0,4')
+ShapeFctSelect = RadioButtons(plt.axes([0.35, 0.2, 0.08, 0.1]), ('N1','N2','N3','N4', 'detJ'), active=0)
+evalPoint = TextBox(plt.axes([0.35, 0.35, 0.08, 0.04]), 'point for evaluation ('+r'$\xi$'+','+r'$\eta$'+') range:[-1,1]:     ', initial='1,1')
+reset = Button(plt.axes([0.070, 0.615, 0.175, 0.05]), 'Reset physical ele.\nto parametric ele.')
+
+axs1 = fig.add_subplot(211)
+axs2 = fig.add_subplot(212, projection='3d')
+
+update_plot()
+update_Text_evaluated()
+update_Text_symbolic()
+
+nodes[0].on_submit(submit)
+nodes[1].on_submit(submit)
+nodes[2].on_submit(submit)
+nodes[3].on_submit(submit)
+evalPoint.on_submit(submitShort)
+ShapeFctSelect.on_clicked(submit)
+reset.on_clicked(resetFct)
+
+plt.show()
